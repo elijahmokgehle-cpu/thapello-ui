@@ -1,25 +1,37 @@
-import { NextResponse } from 'next/server';
+ // src/app/api/boq/route.js
 
-export async function POST(request) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  const backendUrl = process.env.THAPELLO_BACKEND_URL;
-
-  const { projectData } = await request.json();
-
+export async function POST(req) {
   try {
-    const response = await fetch(`${backendUrl}/calculate-boq`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({ projectData }),
-    });
+    // Parse incoming project data
+    const { projectData } = await req.json();
 
-    const result = await response.json();
+    // For now, we’ll return a mock BOQ (replace with AI logic later)
+    const mockBOQ = {
+      projectName: projectData.projectName || "Untitled Project",
+      location: projectData.location || "Unknown",
+      area: projectData.area || 0,
+      items: [
+        { name: "Cement", qty: 100, unit: "bags" },
+        { name: "Bricks", qty: 1000, unit: "pcs" },
+        { name: "Steel Rods", qty: 50, unit: "pieces" },
+      ],
+    };
 
-    return NextResponse.json({ success: true, data: result });
+    return new Response(
+      JSON.stringify({ success: true, data: mockBOQ }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
   } catch (error) {
-    return NextResponse.json({ success: false, error: error.message });
+    // Return error in a structured way
+    return new Response(
+      JSON.stringify({ success: false, error: error.message }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
   }
 }
