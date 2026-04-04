@@ -1,37 +1,26 @@
- // src/app/api/boq/route.js
-
-export async function POST(req) {
+ // app/api/boq/route.js
+export async function POST(request) {
   try {
-    // Parse incoming project data
-    const { projectData } = await req.json();
+    const body = await request.json(); // parse JSON body
+    const { projectName, area, location } = body;
 
-    // For now, we’ll return a mock BOQ (replace with AI logic later)
-    const mockBOQ = {
-      projectName: projectData.projectName || "Untitled Project",
-      location: projectData.location || "Unknown",
-      area: projectData.area || 0,
-      items: [
-        { name: "Cement", qty: 100, unit: "bags" },
-        { name: "Bricks", qty: 1000, unit: "pcs" },
-        { name: "Steel Rods", qty: 50, unit: "pieces" },
-      ],
-    };
+    // Dummy BOQ response for testing
+    const items = [
+      { name: "Concrete", qty: 10, unit: "m³", rate: 100, total: 1000 },
+      { name: "Bricks", qty: 500, unit: "pcs", rate: 2, total: 1000 },
+    ];
+
+    const grandTotal = items.reduce((sum, item) => sum + item.total, 0);
 
     return new Response(
-      JSON.stringify({ success: true, data: mockBOQ }),
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }
+      JSON.stringify({ items, grandTotal }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
     );
-  } catch (error) {
-    // Return error in a structured way
+  } catch (err) {
+    console.error(err);
     return new Response(
-      JSON.stringify({ success: false, error: error.message }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      }
+      JSON.stringify({ error: "Failed to generate BOQ" }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
 }
