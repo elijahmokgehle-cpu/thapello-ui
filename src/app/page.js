@@ -1,314 +1,418 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import useAuth from "./lib/useAuth";
+import { db } from "./lib/firebase";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
 
-const UNIT_OPTIONS = ["m²", "m³", "m", "kg", "tons", "pcs", "item"];
-const CURRENCY_OPTIONS = ["R", "$", "€", "£"]; // Optional for future
+import {
+  collection,
+  addDoc,
+  getDocs,
+  query,
+  where,
+  orderBy,
+} from "firebase/firestore";
+import ProjectDetailsForm from "./components/ProjectDetailsForm";
+import BOQEditor from "./components/BOQEditor";
+import ExportControls from "./components/ExportControls";
+import SavedProjectsList from "./components/SavedProjectsList";
+import ProjectIntelligenceProfile from "./components/ProjectIntelligenceProfile";
+import IntelligencePreviewPanel from "./components/IntelligencePreviewPanel";
+import { analyzeProjectProfile } from "./lib/intelligence/rulesEngine";
 
-export default function Home() {
+export default function Page() {
+  const router = useRouter();
+  const { user, loading } = useAuth();
+
+  const [authChecked, setAuthChecked] = useState(false);
+
   const [projectName, setProjectName] = useState("");
   const [area, setArea] = useState("");
   const [location, setLocation] = useState("");
-  const [currency, setCurrency] = useState("R"); // Default currency
+  const [currency, setCurrency] = useState("R");
 
   const [boq, setBoq] = useState([]);
   const [grandTotal, setGrandTotal] = useState(0);
 
-  // Generate BOQ
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const [projectType, setProjectType] = useState("");
+  const [buildingCategory, setBuildingCategory] = useState("");
+  const [constructionMethod, setConstructionMethod] = useState("");
+  const [qualityLevel, setQualityLevel] = useState("");
+
+  const [projects, setProjects] = useState([]);
+
+  const units = [
+    "m²",
+    "m³",
+    "m",
+    "kg",
+    "tons",
+    "pcs",
+    "item",
+  ];
+
+  useEffect(() => {
+    if (!loading) {
+      if (!user) {
+        router.push("/login");
+      } else {
+        setAuthChecked(true);
+        loadProjects();
+      }
+    }
+  }, [loading, user, router]);
+
+  useEffect(() => {
+    const total = boq.reduce(
+      (sum, item) => sum + Number(item.total || 0),
+      0
+    );
+
+    setGrandTotal(total);
+  }, [boq]);
+
   const generateBOQ = async () => {
     try {
-      const res = await fetch("/api/boq", {
+      setIsGenerating(true);
+
+      const analysis = analyzeProjectProfile({
+        projectType,
+        buildingCategory,
+        constructionMethod,
+        qualityLevel,
+      });
+
+      const response = await fetch("/api/boq", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ projectName, area, location }),
+        body: JSON.stringify({
+          projectName,
+          area,
+          location,
+          projectType,
+          buildingCategory,
+          constructionMethod,
+          qualityLevel,
+          intelligenceAnalysis: analysis,
+        }),
       });
 
-      if (!res.ok) throw new Error("Failed to fetch BOQ");
+      const data = await response.json();
 
-      const data = await res.json();
-
-      setBoq(Array.isArray(data.items) ? data.items : []);
-      setGrandTotal(Number(data.grandTotal) || 0);
-    } catch (err) {
-      console.error(err);
-      alert("Failed to generate BOQ. Check console.");
+      setBoq(data.items || []);
+      setGrandTotal(data.grandTotal || 0);
+    } catch (error) {
+      console.error(error);
+      alert("Failed to generate BOQ");
+    } finally {
+      setIsGenerating(false);
     }
   };
 
-  // Update item field
   const updateItem = (index, field, value) => {
     const updated = [...boq];
+
     updated[index][field] = value;
 
-    if (field === "qty" || field === "rate") {
-      updated[index].total =
-        Number(updated[index].qty) * Number(updated[index].rate);
-    }
+    const qty = Number(updated[index].qty || 0);
+    const rate = Number(updated[index].rate || 0);
+
+    updated[index].total = qty * rate;
 
     setBoq(updated);
-    recalcGrandTotal(updated);
   };
 
-  // Recalculate grand total
-  const recalcGrandTotal = (items) => {
-    const total = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
-    setGrandTotal(total);
-  };
-
-  // Add item
   const addItem = () => {
-    const newItem = {
-      name: "New Item",
-      qty: 0,
-      unit: "m²",
-      rate: 0,
-      total: 0,
-    };
-    setBoq((prev) => [...prev, newItem]);
+    setBoq([
+      ...boq,
+      {
+        name: "",
+        qty: 0,
+        unit: "item",
+        rate: 0,
+        total: 0,
+      },
+    ]);
   };
 
-  // Delete item
   const deleteItem = (index) => {
     const updated = boq.filter((_, i) => i !== index);
     setBoq(updated);
-    recalcGrandTotal(updated);
   };
 
-  // Reset BOQ
   const resetBOQ = () => {
-    if (!confirm("Are you sure you want to reset the BOQ?")) return;
+    setProjectName("");
+    setArea("");
+    setLocation("");
+    setCurrency("R");
+    setProjectType("");
+    setBuildingCategory("");
+    setConstructionMethod("");
+    setQualityLevel("");
     setBoq([]);
     setGrandTotal(0);
   };
 
-  // Export PDF
   const exportPDF = () => {
+    if (boq.length === 0) {
+      alert("No BOQ data available.");
+      return;
+    }
+
     const doc = new jsPDF();
-    doc.setFontSize(16);
-    doc.text("Thapello AI - BOQ", 14, 20);
 
-    doc.setFontSize(12);
-    doc.text(`Project: ${projectName}`, 14, 30);
-    doc.text(`Area: ${area}`, 14, 36);
-    doc.text(`Location: ${location}`, 14, 42);
+    doc.setFontSize(18);
+    doc.text("Thapello AI - BOQ Report", 14, 20);
 
-    const tableData = boq.map((item) => [
-      item.name,
-      item.qty,
-      item.unit,
-      `${currency} ${Number(item.rate).toFixed(2)}`,
-      `${currency} ${Number(item.total).toFixed(2)}`,
-    ]);
+    doc.setFontSize(11);
+    doc.text(`Project: ${projectName}`, 14, 35);
+    doc.text(`Area: ${area}`, 14, 42);
+    doc.text(`Location: ${location}`, 14, 49);
+    doc.text(`Currency: ${currency}`, 14, 56);
 
     autoTable(doc, {
-      startY: 50,
+      startY: 65,
       head: [["Item", "Qty", "Unit", "Rate", "Total"]],
-      body: tableData,
-      theme: "grid",
+      body: boq.map((item) => [
+        item.name,
+        item.qty,
+        item.unit,
+        item.rate,
+        `${currency}${Number(item.total).toFixed(2)}`,
+      ]),
     });
 
+    const finalY = doc.lastAutoTable.finalY + 10;
+
+    doc.setFontSize(14);
     doc.text(
-      `Grand Total: ${currency} ${grandTotal.toFixed(2)}`,
+      `Grand Total: ${currency}${grandTotal.toFixed(2)}`,
       14,
-      doc.lastAutoTable.finalY + 10
+      finalY
     );
 
-    doc.save(`${projectName || "BOQ"}.pdf`);
+    doc.save("Thapello_AI_BOQ_Report.pdf");
   };
 
-  // Export Excel
   const exportExcel = () => {
-    const wsData = [
+    if (boq.length === 0) {
+      alert("No BOQ data available.");
+      return;
+    }
+
+    const worksheetData = [
+      ["Project Name", projectName],
+      ["Area", area],
+      ["Location", location],
+      ["Currency", currency],
+      [],
       ["Item", "Qty", "Unit", "Rate", "Total"],
       ...boq.map((item) => [
         item.name,
         item.qty,
         item.unit,
-        Number(item.rate),
-        Number(item.total),
+        item.rate,
+        item.total,
       ]),
-      ["Grand Total", "", "", "", grandTotal],
+      [],
+      ["Grand Total", grandTotal],
     ];
 
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    XLSX.utils.book_append_sheet(wb, ws, "BOQ");
-
-    XLSX.writeFile(wb, `${projectName || "BOQ"}.xlsx`);
+    const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "BOQ");
+    XLSX.writeFile(workbook, "Thapello_AI_BOQ_Report.xlsx");
   };
 
+  const saveProject = async () => {
+    try {
+      if (!projectName) {
+        alert("Please enter a project name.");
+        return;
+      }
+
+      setIsSaving(true);
+
+      const analysis = analyzeProjectProfile({
+        projectType,
+        buildingCategory,
+        constructionMethod,
+        qualityLevel,
+      });
+
+      await addDoc(collection(db, "projects"), {
+        projectName,
+        area,
+        location,
+        currency,
+        projectType,
+        buildingCategory,
+        constructionMethod,
+        qualityLevel,
+        intelligenceAnalysis: analysis, // Stored for future reporting and historical intelligence insights
+        boq,
+        grandTotal,
+        userId: user.uid,
+        timestamp: new Date(),
+      });
+
+      alert("Project saved successfully.");
+
+      loadProjects();
+    } catch (error) {
+      console.error(error);
+      alert("Failed to save project.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const loadProjects = async () => {
+    try {
+      if (!user) return;
+
+      const q = query(
+        collection(db, "projects"),
+        where("userId", "==", user.uid),
+        orderBy("timestamp", "desc")
+      );
+
+      const snapshot = await getDocs(q);
+
+      const loadedProjects = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+
+      setProjects(loadedProjects);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const openProject = (project) => {
+    setProjectName(project.projectName || "");
+    setArea(project.area || "");
+    setLocation(project.location || "");
+    setCurrency(project.currency || "R");
+    setProjectType(project.projectType || "");
+    setBuildingCategory(project.buildingCategory || "");
+    setConstructionMethod(project.constructionMethod || "");
+    setQualityLevel(project.qualityLevel || "");
+
+    const savedAnalysis = project.intelligenceAnalysis || null;
+    // Restore saved intelligence snapshot for reporting/audit purposes if available.
+    // The live preview continues to use the current profile inputs.
+    if (savedAnalysis) {
+      console.log("Loaded intelligenceAnalysis snapshot:", savedAnalysis);
+    }
+
+    setBoq(project.boq || []);
+    setGrandTotal(project.grandTotal || 0);
+  };
+
+  if (!authChecked) {
+    return (
+      <div style={{ padding: 40 }}>
+        Loading Thapello AI...
+      </div>
+    );
+  }
+
   return (
-    <main className="p-8 max-w-6xl mx-auto">
-      <h1 className="text-3xl font-bold mb-6">Thapello AI - BOQ Generator</h1>
+    <div
+      style={{
+        maxWidth: "1200px",
+        margin: "0 auto",
+        padding: "30px",
+      }}
+    >
+      <h1>Thapello AI</h1>
 
-      {/* INPUT FORM */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <input
-          className="border p-2 rounded"
-          placeholder="Project Name"
-          value={projectName}
-          onChange={(e) => setProjectName(e.target.value)}
-        />
-        <input
-          className="border p-2 rounded"
-          placeholder="Area (m²)"
-          value={area}
-          onChange={(e) => setArea(e.target.value)}
-        />
-        <input
-          className="border p-2 rounded"
-          placeholder="Location"
-          value={location}
-          onChange={(e) => setLocation(e.target.value)}
-        />
-        <select
-          className="border p-2 rounded"
-          value={currency}
-          onChange={(e) => setCurrency(e.target.value)}
-        >
-          {CURRENCY_OPTIONS.map((cur) => (
-            <option key={cur} value={cur}>
-              {cur}
-            </option>
-          ))}
-        </select>
-      </div>
+      <p>Quantity Surveying BOQ Generator</p>
 
-      {/* BUTTONS */}
-      <div className="flex gap-3 mb-4">
-        <button
-          type="button"
-          onClick={generateBOQ}
-          className="bg-black text-white px-4 py-2 rounded"
-        >
-          Generate BOQ
-        </button>
+      <hr />
 
-        {boq?.length > 0 && (
-          <>
-            <button
-              type="button"
-              onClick={addItem}
-              className="bg-green-600 text-white px-4 py-2 rounded"
-            >
-              + Add Item
-            </button>
-            <button
-              type="button"
-              onClick={resetBOQ}
-              className="bg-red-600 text-white px-4 py-2 rounded"
-            >
-              Reset BOQ
-            </button>
-            <button
-              type="button"
-              onClick={exportPDF}
-              className="bg-blue-600 text-white px-4 py-2 rounded"
-            >
-              Export PDF
-            </button>
-            <button
-              type="button"
-              onClick={exportExcel}
-              className="bg-orange-600 text-white px-4 py-2 rounded"
-            >
-              Export Excel
-            </button>
-          </>
-        )}
-      </div>
+      <ProjectDetailsForm
+        projectName={projectName}
+        area={area}
+        location={location}
+        currency={currency}
+        setProjectName={setProjectName}
+        setArea={setArea}
+        setLocation={setLocation}
+        setCurrency={setCurrency}
+        generateBOQ={generateBOQ}
+        isGenerating={isGenerating}
+        saveProject={saveProject}
+        isSaving={isSaving}
+        loadProjects={loadProjects}
+        resetBOQ={resetBOQ}
+      />
 
-      {/* BOQ TABLE */}
-      {boq?.length > 0 && (
-        <div className="overflow-x-auto border rounded">
-          <table className="w-full border-collapse text-sm">
-            <thead className="bg-gray-100 text-left">
-              <tr>
-                <th className="p-3 border">Item</th>
-                <th className="p-3 border">Qty</th>
-                <th className="p-3 border">Unit</th>
-                <th className="p-3 border">Rate</th>
-                <th className="p-3 border">Total</th>
-                <th className="p-3 border">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {boq.map((item, index) => (
-                <tr key={index} className="hover:bg-gray-50">
-                  <td className="border p-2">
-                    <input
-                      className="w-full p-1 border rounded"
-                      value={item.name || ""}
-                      onChange={(e) =>
-                        updateItem(index, "name", e.target.value)
-                      }
-                    />
-                  </td>
-                  <td className="border p-2">
-                    <input
-                      type="number"
-                      className="w-full p-1 border rounded"
-                      value={item.qty || 0}
-                      onChange={(e) =>
-                        updateItem(index, "qty", e.target.value)
-                      }
-                    />
-                  </td>
-                  <td className="border p-2">
-                    <select
-                      className="w-full p-1 border rounded"
-                      value={item.unit || "m²"}
-                      onChange={(e) =>
-                        updateItem(index, "unit", e.target.value)
-                      }
-                    >
-                      {UNIT_OPTIONS.map((unit) => (
-                        <option key={unit} value={unit}>
-                          {unit}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className="border p-2">
-                    <input
-                      type="number"
-                      className="w-full p-1 border rounded"
-                      value={item.rate || 0}
-                      onChange={(e) =>
-                        updateItem(index, "rate", e.target.value)
-                      }
-                    />
-                  </td>
-                  <td className="border p-2 font-semibold">
-                    {currency} {Number(item.total || 0).toFixed(2)}
-                  </td>
-                  <td className="border p-2 text-center">
-                    <button
-                      type="button"
-                      onClick={() => deleteItem(index)}
-                      className="text-red-600 font-bold"
-                    >
-                      ✕
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      <ProjectIntelligenceProfile
+        projectType={projectType}
+        setProjectType={setProjectType}
+        buildingCategory={buildingCategory}
+        setBuildingCategory={setBuildingCategory}
+        constructionMethod={constructionMethod}
+        setConstructionMethod={setConstructionMethod}
+        qualityLevel={qualityLevel}
+        setQualityLevel={setQualityLevel}
+      />
+
+      <IntelligencePreviewPanel
+        analysis={analyzeProjectProfile({
+          projectType,
+          buildingCategory,
+          constructionMethod,
+          qualityLevel,
+        })}
+      />
+
+      <ExportControls
+        exportPDF={exportPDF}
+        exportExcel={exportExcel}
+      />
+
+      {boq.length > 0 && (
+        <>
+          <BOQEditor
+            boq={boq}
+            updateItem={updateItem}
+            addItem={addItem}
+            deleteItem={deleteItem}
+            currency={currency}
+          />
+
+          <div
+            style={{
+              marginTop: "20px",
+              fontSize: "20px",
+              fontWeight: "bold",
+            }}
+          >
+            Grand Total: {currency}
+            {grandTotal.toFixed(2)}
+          </div>
+        </>
       )}
 
-      {/* GRAND TOTAL */}
-      {boq?.length > 0 && (
-        <div className="mt-6 text-right text-xl font-bold">
-          Grand Total: {currency} {grandTotal.toFixed(2)}
-        </div>
-      )}
-    </main>
+      <hr style={{ marginTop: "40px" }} />
+
+      <SavedProjectsList
+        projects={projects}
+        openProject={openProject}
+      />
+    </div>
   );
 }

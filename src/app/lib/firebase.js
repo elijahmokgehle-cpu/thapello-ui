@@ -1,16 +1,22 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
+import { getFirestore } from "firebase/firestore";
+import { getAuth } from "firebase/auth";
 
+// Firebase config (your existing config stays valid here)
 const firebaseConfig = {
-  apiKey: "AIzaSyAfbb2lYgouH0VtE3tz2poQJhbaBeCjGgM",
-  authDomain: "thapello-ai.firebaseapp.com",
-  projectId: "thapello-ai",
-  storageBucket: "thapello-ai.firebasestorage.app",
-  messagingSenderId: "1020163888499",
-  appId: "1:1020163888499:web:8d71c0536dd52af0a02106",
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-const app = !getApps().length
-  ? initializeApp(firebaseConfig)
-  : getApp();
+// Prevent re-initialization in Next.js App Router
+const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 
-export default app;
+// Services
+const db = getFirestore(app);
+const auth = getAuth(app);
+
+export { app, db, auth };

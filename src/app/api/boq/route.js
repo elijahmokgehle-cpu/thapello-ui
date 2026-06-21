@@ -2,7 +2,10 @@
 export async function POST(request) {
   try {
     const body = await request.json(); // parse JSON body
-    const { projectName, area, location } = body;
+    const { projectName, area, location, intelligenceAnalysis } = body;
+
+    // Intelligence context received for future QS-driven BOQ rules
+    // Currently stored for foundation; will be used in advanced BOQ generation logic
 
     // Dummy BOQ response for testing
     const items = [
